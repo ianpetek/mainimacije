@@ -1,3 +1,4 @@
+import manim
 from manim import *
 import numpy as np
 import scipy.stats as stats
@@ -51,14 +52,13 @@ class StandardBivariateNormal(ThreeDScene):
         z_label = ax.get_z_axis_label(r'\phi(x, y)', buff=0.2)
         axis_labels = VGroup(x_label, y_label, z_label)
 
-        mean = [0, 0, 0]
+        mean = [0, 0]
         cov = [
-            [0.5, 0, 0],  # Correlations with x
-            [0, 0.5, 0],  # Correlations with y
-            [0, 0, 0.002]  # Correlations with z
+            [0.5, 0],  # Correlations with x
+            [0, 0.5],  # Correlations with y
         ]
 
-        self.GROUND_TRUTH = [1, 1, 0.02]
+        self.GROUND_TRUTH = [0.5, 1]
 
         mu_x = ValueTracker(mean[0])
         mu_y = ValueTracker(mean[1])
@@ -76,19 +76,29 @@ class StandardBivariateNormal(ThreeDScene):
 
         ## sampling axes
         SAMPLE_AXIS_POSITION = (8, 0, 5)
-        ax_sample = ThreeDAxes(
-            x_range=[-4, 4, 1],
-            y_range=[-4, 4, 1],
-            z_range=[-0.2, 0.2, 0.05]
-        ).move_to(SAMPLE_AXIS_POSITION).scale(0.7).rotate(-0.3, about_point=SAMPLE_AXIS_POSITION, axis=Z_AXIS).rotate(
-            -0.07, about_point=SAMPLE_AXIS_POSITION, axis=Y_AXIS)
+        ax_sample = Axes(
+            x_range=[-2, 2, 1],
+            y_range=[-2, 2, 1],
+            x_length=4,
+            y_length=4,
+        ).scale(0.9).to_corner(UR)
 
-        x_label_sample = ax.get_x_axis_label(r'x')
-        y_label_sample = ax.get_y_axis_label(r'y', buff=0.2)
-        z_label_sample = ax.get_z_axis_label(r'\alpha', buff=0.2)
+        x_label_sample = ax_sample.get_x_axis_label(r'x')
+        y_label_sample = ax_sample.get_y_axis_label(r'y')
 
-        axis_labels = VGroup(x_label, y_label, z_label)
-        self.add(ax_sample, axis_labels)
+        axis_labels = VGroup(x_label_sample, y_label_sample)
+        convergance_edge = lambda x : (2 * x -1)
+        plot = ax_sample.plot(convergance_edge, x_range=[-0.5, 1.5, 1], color=RED)
+
+        ground_truth_X = MathTex(r"\mathbf{\times}", color=GREEN, z_index=3).scale(1.2).move_to(ax_sample.c2p(
+                 self.GROUND_TRUTH[0],
+                 self.GROUND_TRUTH[1]
+             ))
+
+        self.add_fixed_in_frame_mobjects(ground_truth_X)
+
+        self.add_fixed_in_frame_mobjects(ax_sample, axis_labels, plot)
+
 
         distribution = always_redraw(
             lambda: Surface(
@@ -177,7 +187,7 @@ class StandardBivariateNormal(ThreeDScene):
 
         # Now play your animation...
         for i in range(3):
-            mean, cov = self.sample_and_recalculate(ax_sample, mean, cov)
+            mean, cov = self.sample_and_recalculate(ax_sample, mean, cov, convergance_edge)
 
             # Note: Calculate the target rho value for the animation
             target_rho = cov[0][1] / (math.sqrt(cov[0][0]) * math.sqrt(cov[1][1]))
@@ -214,56 +224,72 @@ class StandardBivariateNormal(ThreeDScene):
         self.wait(2)
         '''
 
-    def sample_and_recalculate(self, ax_sample, mu, sigma):
+    def sample_and_recalculate(self, ax_sample, mu, sigma, convergence_edge_function):
         # remove provious all_points and highlight_points if they exist
-        if hasattr(self, 'all_points'):
-            self.play(Uncreate(self.all_points, run_time=0.3))
+        if hasattr(self, 'valid_points'):
+            self.play(FadeOut(self.valid_points, run_time=0.3))
+            self.remove_fixed_in_frame_mobjects(self.valid_points)
 
         curr_sample = sampleNormalDistribution(mu, sigma, 100)
-        self.all_points = VGroup()
+        valid_sample = []
+        self.valid_points = VGroup()
+        self.discarded_points = VGroup()
         for i in curr_sample:
             print(i)
-            point = Dot3D(
+            point = Dot(
                 ax_sample.c2p(
                     i[0],
-                    i[1],
-                    i[2]
+                    i[1]
                 ),
                 radius=0.03,
                 color=COLOR_RAMP[4]
             )
-            self.all_points.add(point)
-        self.play(Create(self.all_points))
+            if convergence_edge_function(i[0]) > i[1]:
+                self.discarded_points.add(point)
+            else:
+                self.valid_points.add(point)
+                valid_sample.append(i)
+        valid_sample = np.array(valid_sample)
+        self.add_fixed_in_frame_mobjects(self.valid_points, self.discarded_points)
+        self.play(FadeIn(self.valid_points), FadeIn(self.discarded_points))
         self.wait(1)
 
+        if len(self.discarded_points) != 0:
+            self.play(Indicate(self.discarded_points, color=RED))
+            self.wait(0.5)
+            self.play(FadeOut(self.discarded_points))
+            self.remove_fixed_in_frame_mobjects(self.discarded_points)
+            self.wait(1)
         # highlight n points closest to ground truth
-        distances = np.linalg.norm(curr_sample - np.array(self.GROUND_TRUTH), axis=1)
+        distances = np.linalg.norm(valid_sample - np.array(self.GROUND_TRUTH), axis=1)
         closest_n = np.argsort(distances)[:20]
 
-        new_mu = np.mean(curr_sample[closest_n], axis=0)
-        new_sigma = np.cov(curr_sample[closest_n], rowvar=False)
+        new_mu = np.mean(valid_sample[closest_n], axis=0)
+        new_sigma = np.cov(valid_sample[closest_n], rowvar=False)
         self.highlight_points = VGroup()
         for i in closest_n:
-            point = Dot3D(
+            point = Dot(
                 ax_sample.c2p(
-                    curr_sample[i][0],
-                    curr_sample[i][1],
-                    curr_sample[i][2]
+                    valid_sample[i][0],
+                    valid_sample[i][1]
                 ),
                 radius=0.05,
-                color=RED
+                color=GREEN
             )
             self.highlight_points.add(point)
-        self.play(Indicate(self.highlight_points, scale_factor=1.5))
+
+        self.add_fixed_in_frame_mobjects(self.highlight_points)
+        self.play(Indicate(self.highlight_points, color=GREEN))
         self.wait(1)
 
-        target_point = (8, 0, 1)
+        target_point = manim.DR
 
         # 2. Create a list of animations using list comprehension
         animations = [p.animate.move_to(target_point) for p in self.highlight_points]
 
         # 3. Unpack the list into self.play
         self.play(*animations, run_time=1)
+        self.remove_fixed_in_frame_mobjects(self.highlight_points)
         self.remove(self.highlight_points)
 
         return new_mu, new_sigma
